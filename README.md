@@ -1,4 +1,4 @@
-# GLOBAL Rotation
+# GLOBAL Rotation — ALiTiS — v2.0
 
 **A universal, fully configurable, class-agnostic spell rotation plugin for Diablo IV.**
 
