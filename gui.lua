@@ -1,5 +1,5 @@
 local plugin_label   = 'global_rotation_alitis'
-local plugin_version = '2.0'
+local plugin_version = '2.3'
 console.print('Lua Plugin - GLOBAL Rotation - ALiTiS - v' .. plugin_version)
 
 local gui = {}
@@ -42,15 +42,17 @@ gui.plugin_version = plugin_version
 gui.elements = {
     main_tree      = tree_node:new(0),
     enabled        = cb(false, 'enabled'),
+    pause_in_town  = cb(true, 'pause_in_town'),  -- Default ON - pauses rotation in Cerrigar
     use_keybind    = cb(false, 'use_keybind'),
     keybind        = keybind:new(0x0A, true, get_hash(plugin_label .. '_keybind')),
 
     global_tree    = tree_node:new(1),
-    scan_range     = sf(5.0, 30.0, 16.0, 'scan_range'),
+    scan_range     = sf(5.0, 30.0, 12.0, 'scan_range'),
     anim_delay     = sf(0.0, 0.5,  0.05, 'anim_delay'),
 
     export_profile = cb(false, 'export_profile'),
     import_profile = cb(false, 'import_profile'),
+    reload_profile = cb(true, 'reload_profile'),
     build_name_combo  = combo_box:new(0, get_hash(plugin_label .. '_build_name')),
     build_profile_tree = tree_node:new(2),
 
@@ -61,8 +63,13 @@ gui.elements = {
     overlay_font_size  = si(12, 19, 14,   'overlay_font_size'),
     overlay_line_gap   = si(0, 5,   0,    'overlay_line_gap'),
     overlay_show_buffs = cb(false, 'overlay_show_buffs'),
+    
+    show_global_range  = cb(false, 'show_global_range'),
 
     debug_mode     = cb(false, 'debug_mode'),
+    
+    use_batmobile  = cb(false, 'use_batmobile'),
+    enable_batmobile_fallback = cb(false, 'enable_batmobile_fallback'),
 
     equipped_tree  = tree_node:new(1),
     inactive_tree  = tree_node:new(1),
@@ -74,6 +81,7 @@ gui.elements = {
     evade_on_danger      = cb(true,  'evade_on_danger'),
     evade_auto_engage    = cb(false, 'evade_auto_engage'),
     evade_engage_dist    = sf(0.0, 5.0, 2.5, 'evade_engage_dist'),
+    evade_min_range      = sf(0.0, 15.0, 0.0, 'evade_min_range'),
     -- Sequence and combo chain for Evade (rendered inside Evade Settings)
     evade_seq_tree       = tree_node:new(2),
     evade_combo_tree     = tree_node:new(2),
@@ -83,25 +91,24 @@ gui.render = function(spell_config, equipped_ids, all_known_ids)
     if not gui.elements.main_tree:push('GLOBAL Rotation | ALiTiS | v' .. plugin_version) then return end
 
     gui.elements.enabled:render('Enable', 'Enable the universal rotation')
+    gui.elements.pause_in_town:render('Pause in Town', 'Automatically pause rotation when in town')
     gui.elements.use_keybind:render('Use keybind', 'Toggle rotation on/off with a key')
     if gui.elements.use_keybind:get() then
-        gui.elements.keybind:render('Toggle Key', 'Key to toggle the rotation')
+        render_menu_header('Click the key field below and press a key to bind it. The default shown is a placeholder — not Space.')
+        gui.elements.keybind:render('Toggle Key', 'Press a key to bind it. The shown default is a placeholder — click and press your desired key to assign it.')
     end
 
     if gui.elements.global_tree:push('Global Settings') then
         gui.elements.scan_range:render('Scan Range', 'How far to scan for enemies', 1)
         gui.elements.anim_delay:render('Animation Delay (s)', 'Global animation delay after each cast', 2)
 
-        if gui.elements.build_profile_tree:push('Build Profile') then
-            local build_presets = {
-                'Default', 'Burst', 'Farm', 'Boss', 'Safe', 'Speed',
-                'AoE', 'Single Target', 'Leveling', 'Endgame', 'Custom A', 'Custom B'
-            }
-            gui.elements.build_name_combo:render('Build Name', build_presets, 'Name used when saving/loading this profile. Each name saves as a separate file.')
-            gui.elements.import_profile:render('Import build profile', 'Load settings from the selected class + build JSON file')
-            gui.elements.export_profile:render('Export build profile', 'Save current settings to a named JSON file for this class and build')
-            gui.elements.build_profile_tree:pop()
+        gui.elements.use_batmobile:render('Use Batmobile Navigation', 'Enable automatic pathfinding when Batmobile plugin is detected (controls wall/obstacle detection and stuck recovery)')
+        
+        if gui.elements.use_batmobile:get() then
+            gui.elements.enable_batmobile_fallback:render('  Enable Fallback Navigation (Batmobile)', 'Use Batmobile for general movement when no dash spell is available (stops the "Using Batmobile fallback navigation" spam when OFF)')
         end
+
+        gui.elements.debug_mode:render('Debug Mode', 'Print cast info to console')
 
         gui.elements.overlay_enabled:render('Overlay', 'Show/hide the on-screen overlay')
         if gui.elements.overlay_enabled:get() then
@@ -111,11 +118,23 @@ gui.render = function(spell_config, equipped_ids, all_known_ids)
                 gui.elements.overlay_font_size:render('Font Size', 'Size of the overlay text', 1)
                 gui.elements.overlay_line_gap:render('Line Gap', 'Extra spacing between lines', 1)
                 gui.elements.overlay_show_buffs:render('Show Active Buff List', 'Show active buffs in the overlay')
+                gui.elements.show_global_range:render('Show Global Scan Range Circle', 'Draw a circle around the player showing the current global scan range')
                 gui.elements.overlay_tree:pop()
             end
         end
 
-        gui.elements.debug_mode:render('Debug Mode', 'Print cast info to console')
+        -- Build Profile as its own main category (at the end)
+        if gui.elements.build_profile_tree:push('Build Profile') then
+            local build_presets = {
+                'Default', 'Burst', 'Farm', 'Boss', 'Safe', 'Speed',
+                'AoE', 'Single Target', 'Leveling', 'Endgame', 'Custom A', 'Custom B'
+            }
+            gui.elements.build_name_combo:render('Build Name', build_presets, 'Name used when saving/loading this profile. Each name saves as a separate file.')
+            gui.elements.import_profile:render('Import build profile', 'Load settings from the selected class + build JSON file')
+            gui.elements.export_profile:render('Export build profile', 'Save current settings to a named JSON file for this class and build')
+            gui.elements.reload_profile:render('Reload profile (F5)', 'Press F5 or click to reload the current build profile from disk')
+            gui.elements.build_profile_tree:pop()
+        end
 
         gui.elements.global_tree:pop()
     end
@@ -131,6 +150,7 @@ gui.render = function(spell_config, equipped_ids, all_known_ids)
             gui.elements.evade_auto_engage:render('Auto Engage', 'Use Evade to dash toward the current target when available')
             if gui.elements.evade_auto_engage:get() then
                 gui.elements.evade_engage_dist:render('Engage Distance', 'Stop this many units short of the target when dashing (0 = on top of target)', 1)
+                gui.elements.evade_min_range:render('Minimum Range', 'Don\'t cast if target is closer than this distance (0 = no minimum). Prevents wasting Evade on very close targets.', 1)
             end
 
             -- Sequence Formula for Evade

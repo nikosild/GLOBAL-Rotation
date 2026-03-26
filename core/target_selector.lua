@@ -1,6 +1,6 @@
 local target_selector = {}
 
-local SCAN_RANGE = 16.0
+local SCAN_RANGE = 12.0
 
 local function _try(fn, ...)
     local ok, v = pcall(fn, ...)
@@ -80,6 +80,9 @@ target_selector.MODE_CLEAVE   = 4
 function target_selector.get_targets(player_pos, range)
     range = range or SCAN_RANGE
     local r2 = range * range
+
+    -- DEBUG: Uncomment to see range being used
+    -- console.print(string.format('[TARGET_SELECTOR DEBUG] Using range: %.1f yards (%.1f squared)', range, r2))
 
     local enemies = _enemy_list()
     local result = {

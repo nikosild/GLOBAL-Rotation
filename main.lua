@@ -17,9 +17,11 @@ local last_scan     = -999
 local last_class_key = nil
 
 local settings = {
-    scan_range         = 16.0,
+    scan_range         = 12.0,
     anim_delay         = 0.05,
     debug              = false,
+    use_batmobile      = false,
+    enable_batmobile_fallback = false,
     overlay_enabled    = true,
     overlay_x          = 20,
     overlay_y          = 12,
@@ -38,6 +40,17 @@ local settings = {
 
 local function is_enabled()
     if not gui.elements.enabled:get() then return false end
+    
+    -- Pause in town check (detects ANY town automatically)
+    if gui.elements.pause_in_town:get() then
+        local ok, in_town = pcall(function()
+            return get_local_player():get_attribute(attributes.PLAYER_IN_TOWN_LEVEL_AREA) == 1
+        end)
+        if ok and in_town then
+            return false  -- Pause rotation when in any town
+        end
+    end
+    
     if gui.elements.use_keybind:get() then
         local key   = gui.elements.keybind:get_key()
         local state = gui.elements.keybind:get_state()
@@ -71,12 +84,15 @@ local function update_settings()
     settings.scan_range        = gui.elements.scan_range:get()
     settings.anim_delay        = gui.elements.anim_delay:get()
     settings.debug             = gui.elements.debug_mode:get()
+    settings.use_batmobile     = gui.elements.use_batmobile:get()
+    settings.enable_batmobile_fallback = gui.elements.enable_batmobile_fallback:get()
     settings.overlay_enabled   = gui.elements.overlay_enabled:get()
     settings.overlay_x         = gui.elements.overlay_x:get()
     settings.overlay_y         = gui.elements.overlay_y:get()
     settings.overlay_font_size = gui.elements.overlay_font_size:get()
     settings.overlay_line_gap  = gui.elements.overlay_line_gap:get()
     settings.overlay_show_buffs = gui.elements.overlay_show_buffs and gui.elements.overlay_show_buffs:get() or false
+    
     rotation_engine.set_scan_range(settings.scan_range)
     spell_config.set_equipped_spells(equipped_ids)
     -- Evade skill settings
@@ -85,6 +101,7 @@ local function update_settings()
     settings.evade.on_danger       = gui.elements.evade_on_danger:get()
     settings.evade.auto_engage     = gui.elements.evade_auto_engage:get()
     settings.evade.engage_distance = gui.elements.evade_engage_dist:get()
+    settings.evade.min_range       = gui.elements.evade_min_range:get()
 end
 
 local function _pretty_spell_name(raw)
@@ -146,14 +163,14 @@ end
 
 local function _profile_path_for(class_key, build_name)
     build_name = build_name or _get_build_name()
-    return get_script_root() .. 'global_rotation_' .. tostring(class_key) .. '_' .. build_name .. '.json'
+    return get_script_root() .. tostring(class_key) .. '_' .. build_name .. '.json'
 end
 
 local function _profile_path()
     return _profile_path_for(_class_key())
 end
 
-local function _export_profile(class_key)
+local function _export_profile(class_key, silent)
     local build_name = _get_build_name()
     local data = {
         version    = 1,
@@ -163,6 +180,8 @@ local function _export_profile(class_key)
             scan_range         = gui.elements.scan_range:get(),
             anim_delay         = gui.elements.anim_delay:get(),
             debug_mode         = gui.elements.debug_mode:get(),
+            use_batmobile      = gui.elements.use_batmobile:get(),
+            enable_batmobile_fallback = gui.elements.enable_batmobile_fallback:get(),
             overlay_enabled    = gui.elements.overlay_enabled:get(),
             overlay_x          = gui.elements.overlay_x:get(),
             overlay_y          = gui.elements.overlay_y:get(),
@@ -175,6 +194,7 @@ local function _export_profile(class_key)
             on_danger       = gui.elements.evade_on_danger:get(),
             auto_engage     = gui.elements.evade_auto_engage:get(),
             engage_distance = gui.elements.evade_engage_dist:get(),
+            min_range       = gui.elements.evade_min_range:get(),
         },
         spells = {},
     }
@@ -191,11 +211,13 @@ local function _export_profile(class_key)
         f:close()
     end)
 
-    if ok then
-        console.print('[GLOBAL Rotation | ALiTiS] Exported build "' .. build_name .. '": ' .. path)
-    else
-        console.print('[GLOBAL Rotation | ALiTiS] Export failed: ' .. tostring(err))
-        console.print('[GLOBAL Rotation | ALiTiS] JSON (copy/paste): ' .. json)
+    if not silent then
+        if ok then
+            console.print('[GLOBAL Rotation | ALiTiS] Exported build "' .. build_name .. '": ' .. path)
+        else
+            console.print('[GLOBAL Rotation | ALiTiS] Export failed: ' .. tostring(err))
+            console.print('[GLOBAL Rotation | ALiTiS] JSON (copy/paste): ' .. json)
+        end
     end
 end
 
@@ -204,16 +226,10 @@ local function _import_profile(class_key, silent)
     local path = _profile_path_for(class_key or _class_key(), build_name)
     local f = io.open(path, 'r')
     if not f then
-        -- Fallback: try the old path format (no build name) for backward compatibility
-        local old_path = get_script_root() .. 'global_rotation_' .. tostring(class_key or _class_key()) .. '.json'
-        f = io.open(old_path, 'r')
-        if not f then
-            if not silent then
-                console.print('[GLOBAL Rotation | ALiTiS] Import failed: file not found: ' .. path)
-            end
-            return
+        if not silent then
+            console.print('[GLOBAL Rotation | ALiTiS] Import failed: file not found: ' .. path)
         end
-        path = old_path
+        return
     end
     local json = f:read('*a')
     f:close()
@@ -228,6 +244,8 @@ local function _import_profile(class_key, silent)
         _set_element(gui.elements.scan_range,         data.global.scan_range)
         _set_element(gui.elements.anim_delay,         data.global.anim_delay)
         _set_element(gui.elements.debug_mode,         data.global.debug_mode)
+        _set_element(gui.elements.use_batmobile,      data.global.use_batmobile)
+        _set_element(gui.elements.enable_batmobile_fallback, data.global.enable_batmobile_fallback)
         _set_element(gui.elements.overlay_enabled,    data.global.overlay_enabled)
         _set_element(gui.elements.overlay_x,          data.global.overlay_x)
         _set_element(gui.elements.overlay_y,          data.global.overlay_y)
@@ -241,6 +259,7 @@ local function _import_profile(class_key, silent)
         _set_element(gui.elements.evade_on_danger,   data.evade.on_danger)
         _set_element(gui.elements.evade_auto_engage, data.evade.auto_engage)
         _set_element(gui.elements.evade_engage_dist, data.evade.engage_distance)
+        _set_element(gui.elements.evade_min_range,   data.evade.min_range)
     end
 
     if type(data.spells) == 'table' then
@@ -263,6 +282,17 @@ end
 
 local function handle_profile_io()
     if gui.elements.export_profile and gui.elements.export_profile:get() then
+        local ck = _class_key()
+        -- Block export if class is unknown/generic
+        if ck and (
+            ck:match('^class_%-?%d+') or 
+            ck:match('unknown') or 
+            ck == 'class_'
+        ) then
+            console.print('[GLOBAL Rotation | ALiTiS] Class Undetected. DISMOUNT/Wait until you are in-game with a character')
+            gui.elements.export_profile:set(false)
+            return
+        end
         _export_profile()
         gui.elements.export_profile:set(false)
     end
@@ -274,12 +304,23 @@ end
 
 local function handle_class_profiles()
     local ck = _class_key()
+    
+    -- Skip everything if class is unknown/generic
+    if ck and (
+        ck:match('^class_%-?%d+') or 
+        ck:match('unknown') or 
+        ck == 'class_'
+    ) then
+        return  -- Do nothing until a real class is detected
+    end
+    
     if not last_class_key then
         last_class_key = ck
         _import_profile(ck, true)
         return
     end
     if ck ~= last_class_key then
+        -- Auto-save previous class settings before switching
         _export_profile(last_class_key)
 
         equipped_ids  = {}
@@ -327,7 +368,7 @@ local function render_overlay()
     end
 
     local ts = require 'core.target_selector'
-    local tgts = ts.get_targets(player_pos, settings.scan_range or 16)
+    local tgts = ts.get_targets(player_pos, settings.scan_range or 12)
     local enemy_count = tgts.enemy_count or 0
     line(string.format('%d spells | %d enemies', #equipped_ids, enemy_count), color_white(180))
 
@@ -444,4 +485,32 @@ end)
 
 on_render(function()
     render_overlay()
+    
+    -- Draw range circles
+    if not graphics or not graphics.circle_3d then return end
+    
+    local player = get_local_player()
+    if not player then return end
+    
+    local player_pos = player:get_position()
+    if not player_pos then return end
+    
+    -- Draw global scan range circle
+    if gui.elements.show_global_range:get() then
+        local scan_range = gui.elements.scan_range:get()
+        -- Green circle for global scan range
+        graphics.circle_3d(player_pos, scan_range, color_green(180), 2.0)
+    end
+    
+    -- Draw per-spell range circles
+    for i, spell_id in ipairs(equipped_ids) do
+        if spell_id and spell_id > 1 then
+            local cfg = spell_config.get(spell_id)
+            if cfg and cfg.enabled and cfg.show_range then
+                local range = cfg.range or 12.0
+                -- Blue circle for spell range
+                graphics.circle_3d(player_pos, range, color_blue(180), 1.5)
+            end
+        end
+    end
 end)

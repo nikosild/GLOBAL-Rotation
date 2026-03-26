@@ -5,6 +5,7 @@ local spell_config = {}
 local _elements = {}
 local _buff_name_cache = {}
 local _buff_state = {}
+local _prev_channel_state = {}  -- Track previous channel spell state per spell_id
 
 local buff_provider   = require 'core.buff_provider'
 local target_selector = require 'core.target_selector'
@@ -118,6 +119,7 @@ local function get_elements(spell_id)
 
         -- Movement spell (gap closer): closes distance to melee targets
         is_movement      = checkbox:new(false, get_hash(key(spell_id, 'is_movement'))),
+        min_range        = slider_float:new(0.0, 15.0, 0.0, get_hash(key(spell_id, 'min_range'))),
 
         -- Channel spell (Whirlwind, Incinerate, etc.)
         is_channel            = checkbox:new(false, get_hash(key(spell_id, 'is_channel'))),
@@ -142,6 +144,9 @@ local function get_elements(spell_id)
 
         -- Advanced Settings folder
         advanced_tree   = tree_node:new(2),
+        
+        -- Visual range indicator
+        show_range      = checkbox:new(false, get_hash(key(spell_id, 'show_range'))),
     }
 
     _elements[id] = e
@@ -305,10 +310,29 @@ function spell_config.render(spell_id, display_name)
 
     -- ── Channel / Movement flags ─────────────────────────────────────
     e.is_channel:render('Channel Spell', 'This spell is channeled (Whirlwind, Incinerate, etc.) — will keep channeling while conditions are met')
-    if e.is_channel:get() then
-        e.channel_break_for_cds:render('Break for Cooldowns', 'Pause channeling to cast ready cooldown spells, then resume channeling automatically')
+    
+    -- Auto-sync: channel_break_for_cds matches is_channel state (only when is_channel changes)
+    local is_channel_enabled = e.is_channel:get()
+    local prev_channel_state = _prev_channel_state[spell_id]
+    
+    if prev_channel_state ~= is_channel_enabled then
+        -- Channel Spell checkbox was just toggled
+        _prev_channel_state[spell_id] = is_channel_enabled
+        
+        if is_channel_enabled then
+            e.channel_break_for_cds:set(true)
+        else
+            e.channel_break_for_cds:set(false)
+        end
     end
+    
+    -- Always show Break for Cooldowns (user can manually toggle it)
+    e.channel_break_for_cds:render('Break for Cooldowns', 'Cast ready cooldown spells while channeling (without interrupting the channel)')
+    
     e.is_movement:render('Movement Spell (Gap Closer)', 'Use this spell to close distance to melee targets (dash, teleport, leap, etc.). Fires automatically when a melee target is out of range.')
+    if e.is_movement:get() then
+        e.min_range:render('Minimum Range', 'Don\'t cast if target is closer than this distance (0 = no minimum). Prevents wasting charges on very close targets.', 1)
+    end
     e.is_evade:render('Movement Spell (On Danger)', 'Fire this spell automatically when the player enters a dangerous position (evade zone). Bypasses normal rotation priority. Use for defensive dashes or escapes.')
 
     -- ── Combo Chain ──────────────────────────────────────────────────
@@ -427,6 +451,9 @@ function spell_config.render(spell_id, display_name)
             render_menu_header('[!] Pick a Sequence Name above.')
         end
     end
+    
+    -- Visual range indicator (at the end of advanced settings)
+    e.show_range:render('Show Spell Range Circle', 'Draw a circle around the player showing this spell\'s range')
 
     e.advanced_tree:pop()
     end -- advanced_tree
@@ -604,6 +631,7 @@ function spell_config.get(spell_id)
         combo_boost     = e.combo_boost:get(),
 
         is_movement     = e.is_movement:get(),
+        min_range       = e.min_range:get(),
         is_evade        = e.is_evade:get(),
         is_channel      = e.is_channel:get(),
         channel_break_for_cds = e.channel_break_for_cds:get(),
@@ -614,6 +642,9 @@ function spell_config.get(spell_id)
         seq_step        = e.seq_step:get(),
         seq_window      = e.seq_window:get(),
         seq_cd_behavior = e.seq_cd_behavior:get(),
+        
+        -- Visual range indicator
+        show_range      = e.show_range:get(),
     }
 end
 
@@ -671,6 +702,7 @@ function spell_config.apply(spell_id, cfg)
     _set_element(e.combo_window, cfg.combo_window)
     _set_element(e.combo_boost,  cfg.combo_boost)
     _set_element(e.is_movement,  cfg.is_movement)
+    _set_element(e.min_range,    cfg.min_range)
     _set_element(e.is_evade,     cfg.is_evade)
     _set_element(e.is_channel,   cfg.is_channel)
     _set_element(e.channel_break_for_cds, cfg.channel_break_for_cds)
@@ -683,6 +715,9 @@ function spell_config.apply(spell_id, cfg)
     if type(cfg.seq_name) == 'string' and cfg.seq_name ~= '' then
         _set_seq_name(spell_id, cfg.seq_name)
     end
+    
+    -- Visual range indicator
+    _set_element(e.show_range, cfg.show_range)
 
     if type(cfg.buff_hash) == 'number' then st.buff_hash = cfg.buff_hash end
     if type(cfg.buff_name) == 'string' then st.buff_name = cfg.buff_name end
