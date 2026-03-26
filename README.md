@@ -1,4 +1,4 @@
-GLOBAL Rotation | ALiTiS | v2.3
+# GLOBAL Rotation | ALiTiS | v2.3
 
 Universal rotation engine for Diablo 4 with advanced spell prioritization, channeling support, and intelligent targeting.
 
