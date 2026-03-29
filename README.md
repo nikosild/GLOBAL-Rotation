@@ -1,18 +1,11 @@
-# GLOBAL Rotation | ALiTiS
+# GLOBAL Rotation | ALiTiS | v3.0
 
 Universal rotation engine for Diablo 4. Works with all classes — no class-specific configuration required out of the box.
 
-## Version: 3.0
-
----
-
 ## What It Does
-
 GLOBAL Rotation automates your spell rotation in Diablo 4. It reads your equipped skills, applies your configured priorities, and casts spells automatically based on targets, cooldowns, buffs, and combat conditions — all while you stay in control of movement.
 
----
-
-## Features
+## Features:
 
 ### Rotation Engine
 - Casts spells automatically based on configurable priority order
@@ -24,8 +17,8 @@ GLOBAL Rotation automates your spell rotation in Diablo 4. It reads your equippe
 - **Priority**: Lower number fires first (1 = highest priority)
 - **Target Mode**: Priority (boss > elite > closest), Closest, Lowest HP, Highest HP, Cleave Center
 - **Spell Type**: Auto, Melee, or Ranged — affects movement behavior before casting
-- **Range**: Cast range and AoE check radius per spell
-- **Min Enemies**: Only cast when enough enemies are nearby
+- **Range**: Cast range per spell — each spell uses its own range, no global scan range
+- **AOE Check Radius**: Only shown when Cleave Center or Skip Small Packs is active
 - **Boss Only / Elite Only / Hard Only**: Restrict casting to specific enemy types
 - **Skip Small Packs**: Skip spell if pack size is below a configurable threshold
 - **Require Buff**: Only cast when a specific player buff is active (with stack requirement)
@@ -33,7 +26,7 @@ GLOBAL Rotation automates your spell rotation in Diablo 4. It reads your equippe
 - **HP Condition**: Cast above or below a health percentage threshold
 - **Resource Condition**: Cast above or below a resource percentage threshold
 - **Self Cast**: Cast on yourself regardless of enemy presence
-- **Is Movement (Gap Closer)**: Marks spell as a movement skill for auto-engage
+- **Is Movement (Gap Closer)**: Marks spell as a movement skill
 - **Is Movement (On Danger)**: Fires movement spell when stepping into a danger zone
 - **Is Channel**: Enables channeling mode — maintains cast while moving and casting other spells simultaneously
 - **Break for Cooldowns**: While channeling, pauses to cast off-cooldown non-channel spells
@@ -52,12 +45,12 @@ After a spell fires, temporarily boost another spell's priority for a configurab
 - Auto-engages enemies at configured range
 - Automatically walks toward targets while channeling
 
-### Evade System
+### Evade System (v3.0)
 Two independent evade modes — only one can be active at a time:
 - **Classic Evade**: Fires evade automatically on a cooldown. Supports danger zone detection and auto-engage (dash toward target). Configurable cooldown, minimum range, and engage distance. Located inside Equipped Spells menu
 - **Evade Replacement**: For classes whose Evade is replaced by a class-specific ability. Sends a real Space keypress via `magic.py`. Configurable cooldown, minimum enemy count, and scan range. Launches `magic.py` automatically when enabled
 
-### Butcher Mode
+### Butcher Mode (v3.0)
 Automatically activates when the Butcher buff is detected on the player. Settings panel is hidden when Butcher Mode is disabled. Supports six independent actions:
 - **Hell Charge** (Key 1) — hardcoded 0.5s cooldown, always fires
 - **Culling** (Key 2) — hardcoded 0.65s cooldown, always fires
@@ -69,15 +62,10 @@ Automatically activates when the Butcher buff is detected on the player. Setting
 Python launches automatically when Butcher Mode is enabled and stops when both Butcher Mode and Evade Replacement are disabled. Optional keybind to toggle Butcher KeyMode on/off during gameplay.
 
 ### Targeting
-- Scans for enemies within a configurable global range
+- Scans for enemies at large fixed range — each spell then filters by its own configured range
 - Prioritizes bosses, elites, and champions
 - Filters dead, hidden, invulnerable, and town NPCs
 - Configurable per-spell target selection mode
-
-### Batmobile Integration
-- Optional wall and obstacle detection
-- Forced pathfinding when stuck behind geometry
-- Fallback navigation toggle
 
 ### Overlay
 - On-screen display showing spell readiness, cooldowns, and enemy count
@@ -88,7 +76,6 @@ Python launches automatically when Butcher Mode is enabled and stops when both B
   - `(N/A)` — red, spell is not ready or unaffordable
 - Configurable position, font size, and line spacing
 - Optional active buff list display
-- Global scan range circle (green) drawn around the player
 - Per-spell range circles (blue)
 
 ### Profile System
@@ -106,7 +93,7 @@ Toggle the rotation on and off with a configurable hotkey.
 ### Debug Mode
 Optional console output showing each cast attempt for troubleshooting.
 
-### Skill Rename
+### Skill Rename (v3.0)
 Skills detected on the bar may display internal or abbreviated names. The rename system lets you assign correct display names that appear in both the Equipped Spells menu and the overlay. Names are stored in `custom_names.txt` in the script root folder — auto-generated on every bar scan with skills listed in order (keys 1–4 first, Left Click and Right Click last). Edit the name after `=`, save, and press F5 to reload.
 
 ---
@@ -136,8 +123,7 @@ Change `Punish` to whatever you want — for example `=Holy Strike`. The number 
 ## Installation
 
 1. Place all files in your Diablo 4 scripts folder
-2. Create a `profiles/` subfolder for build profiles
-3. Load the plugin in your Lua loader
+2. Load the plugin in your Lua loader
 
 ---
 
@@ -150,7 +136,7 @@ Change `Punish` to whatever you want — for example `=Holy Strike`. The number 
 5. Configure any conditions you need (boss only, buff requirement, etc.)
 6. Enable **Pause in Town** to automatically stop in safe zones
 7. Use **Build Profile → Export** to save your setup
-8. Open **custom_names.txt** in Notepad to rename skills that show incorrect names in the menu and overlay
+8. Open `custom_names.txt` in Notepad to rename skills that show incorrect names in the menu and overlay
 
 ---
 
@@ -195,76 +181,13 @@ For issues or suggestions, contact ALiTiS.
 - **Overlay Labels**: Priority shown as `[Pr = N]` prefix on each spell line
 - ⭐ **Skill Rename System**: Custom skill names via `custom_names.txt`. File auto-generates with current skill list on every bar scan. Edit names after `=`, save, press F5. Names appear in both the menu tree headers and the overlay. Format: `N) Old name: SkillName (SpellID)=CustomName`
 
-## Butcher Mode Setup (First Time)
-Butcher Mode requires a small Python helper that runs alongside the plugin and sends keypresses and mouse clicks to the game. Follow these steps once and you're done.
-When you enable Butcher Mode, "python" launches automatically in the background. You do not need to start it manually.
-
-### Step 1 — Install Python (one time only)
-Download Python from the official website (You only need to do this once):
-https://www.python.org/ftp/python/pymanager/python-manager-26.0.msix
-
-### Step 2 — Place the files
-Make sure all plugin files are in your scripts folder, including `magic.py`.
-The file must be in the same folder as `main.lua`.
-
-### Step 3 — Load the plugin
-Open your Diablo IV bot loader and press **F5** (or load the script). The plugin will appear in the menu.
-
-### Step 4 — Enable Butcher Mode
-In the plugin menu:
-1. Check **Butcher Mode** to enable it
-2. The **Butcher Mode Settings** panel will appear below
-3. Enable the actions you want (Hell Charge, Culling, Hail of Hooks, Furnace Blast, Carve, Molten Slam)
-4. Adjust Molten Slam cooldown and scan range to your preference
-
-### Step 5 — Enable Clear Mode
-In your bot loader, activate **Clear Mode** (orbwalker mode 3). The rotation engine will now be active.
-
-### Step 6 — Transform into the Butcher and have fun
-Enter combat and transform into the Butcher.
-The plugin detects BUTCHER automatically and starts firing your configured keys and clicks. 
-When you leave Butcher form, it stops automatically.
-
----
-
-## Evade Replacement Setup (First Time)
-Evade Replacement requires the same Python helper as Butcher Mode.
-If you already set up Butcher Mode, Python is already installed — Skip to Step 2.
-Evade Replacement is designed for classes whose Evade key is replaced by a class-specific ability (e.g. Spiritborn, Druid forms, etc.).
-
-### Step 1 — Install Python (one time only, skip if already done)
-Download Python from the official website:
-https://www.python.org/ftp/python/pymanager/python-manager-26.0.msix
-
-### Step 2 — Place the files
-Make sure `magic.py` is in the same folder as `main.lua`.
-
-### Step 3 — Load the plugin
-Press **F5** in your bot loader to load the plugin.
-
-### Step 4 — Configure Evade Replacement
-In the plugin menu:
-1. Open **Equipped Spells → Evade Settings**
-2. Enable **Evade Replacement** (do NOT enable Classic Evade at the same time — they are mutually exclusive)
-3. Set **Cooldown** — how often the Space key fires automatically
-4. Set **Min Enemies Nearby** — set to 0 to always fire on cooldown, or higher to only fire when enemies are present
-5. If Min Enemies > 0, set **Enemy Scan Range** accordingly
-
-### Step 5 — Enable Clear Mode and play
-Activate **Clear Mode** in your bot loader. 
-"Python" launches automatically when **Evade Replacement** is toggled ON, and stops when it is toggled OFF. No manual steps needed.
-Evade Replacement will now fire Space automatically based on your configured cooldown and enemy conditions.
-
----
-
 ### v2.3
 - **Simultaneous Spell Casting During Channeling**: Casts War Cry, Rallying Cry, Iron Skin, and other cooldowns while channeling Whirlwind without interrupting the channel
 - **Auto-Sync Channel Settings**: "Break for Cooldowns" automatically enables when "Channel Spell" is toggled ON and disables when toggled OFF
 - **Pause in Town**: Automatically pauses rotation when in any town using universal detection
-- **Visual Range Indicators**: Global scan range circle (green) and per-spell range circles (blue) drawn on screen
+- **Visual Range Indicators**: Per-spell range circles (blue) drawn on screen
 - **GUI Reorganization**: Build Profile moved to end of Global Settings
 - Fixed long-range channeling — Whirlwind now engages at full configured range
-- Fixed min_enemies check for channeled spells
 - Fixed "Break for Cooldowns" checkbox being overridden every frame
 - Fixed range circle rendering for multiple spells simultaneously
 - Removed all debug console spam from production build
@@ -274,5 +197,4 @@ Evade Replacement will now fire Space automatically based on your configured coo
 - Barbarian default profile with Whirlwind support
 - Spell prioritization system
 - Movement spell support
-- Batmobile integration
 - Profile import/export system

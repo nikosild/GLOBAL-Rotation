@@ -190,7 +190,6 @@ local function get_elements(spell_id)
 
         elite_only    = checkbox:new(false, get_hash(key(spell_id, 'elite_only'))),
         boss_only     = checkbox:new(false, get_hash(key(spell_id, 'boss_only'))),
-        min_enemies   = slider_int:new(0, 15, 1, get_hash(key(spell_id, 'min_enemies'))),
 
         -- Skip small packs: only cast when enough enemies are grouped
         skip_small_packs = checkbox:new(false, get_hash(key(spell_id, 'skip_small_packs'))),
@@ -320,9 +319,10 @@ function spell_config.render(spell_id, display_name)
     local range_label = (stype == 1) and 'Engage range' or 'Spell range'
     local range_tip   = (stype == 1) and 'Melee: will move toward the closest valid enemy until within this range' or 'Skip this spell if no valid enemy is within this range'
     e.range:render(range_label, range_tip, 1)
-    e.aoe_range:render('AOE check radius', 'Count enemies within this radius (used for Min enemies and Cleave targeting)', 1)
-
-    e.min_enemies:render('Min enemies near you', 'Minimum enemies within AOE check radius (0 = always)', 2)
+    local tmode = e.target_mode:get() or 0
+    if tmode == 4 or e.skip_small_packs:get() then
+        e.aoe_range:render('AOE check radius', 'Count enemies within this radius (used for Cleave targeting and Skip Small Packs)', 1)
+    end
 
     -- Skip small packs
     e.skip_small_packs:render('Skip small packs', 'Only cast when enough enemies are grouped in one spot')
@@ -707,7 +707,7 @@ function spell_config.get(spell_id)
 
         elite_only    = e.elite_only:get(),
         boss_only     = e.boss_only:get(),
-        min_enemies   = e.min_enemies:get(),
+        min_enemies   = 0,
 
         skip_small_packs = e.skip_small_packs:get(),
         min_pack_size    = e.min_pack_size:get(),
@@ -780,7 +780,7 @@ function spell_config.apply(spell_id, cfg)
 
     _set_element(e.elite_only,   cfg.elite_only)
     _set_element(e.boss_only,    cfg.boss_only)
-    _set_element(e.min_enemies,  cfg.min_enemies)
+    -- min_enemies intentionally ignored — hardcoded to 0
     _set_element(e.skip_small_packs, cfg.skip_small_packs)
     _set_element(e.min_pack_size,    cfg.min_pack_size)
     _set_element(e.use_on_hard_only, cfg.use_on_hard_only)

@@ -17,11 +17,9 @@ local last_scan     = -999
 local last_class_key = nil
 
 local settings = {
-    scan_range         = 12.0,
+    scan_range         = 40.0,  -- hardcoded, each spell uses its own range
     anim_delay         = 0.05,
     debug              = false,
-    use_batmobile      = false,
-    enable_batmobile_fallback = false,
     overlay_enabled    = true,
     overlay_x          = 20,
     overlay_y          = 12,
@@ -99,11 +97,8 @@ local function refresh_equipped()
 end
 
 local function update_settings()
-    settings.scan_range        = gui.elements.scan_range:get()
     settings.anim_delay        = gui.elements.anim_delay:get()
     settings.debug             = gui.elements.debug_mode:get()
-    settings.use_batmobile     = gui.elements.use_batmobile:get()
-    settings.enable_batmobile_fallback = gui.elements.enable_batmobile_fallback:get()
     settings.overlay_enabled   = gui.elements.overlay_enabled:get()
     settings.overlay_x         = gui.elements.overlay_x:get()
     settings.overlay_y         = gui.elements.overlay_y:get()
@@ -111,7 +106,6 @@ local function update_settings()
     settings.overlay_line_gap  = gui.elements.overlay_line_gap:get()
     settings.overlay_show_buffs = gui.elements.overlay_show_buffs and gui.elements.overlay_show_buffs:get() or false
     
-    rotation_engine.set_scan_range(settings.scan_range)
     spell_config.set_equipped_spells(equipped_ids)
     -- Evade skill settings
     -- Mutual exclusion: Classic Evade and Evade Replacement cannot both be on.
@@ -277,11 +271,8 @@ local function _export_profile(class_key, silent)
         class      = class_key or _class_key(),
         build_name = build_name,
         global  = {
-            scan_range         = gui.elements.scan_range:get(),
             anim_delay         = gui.elements.anim_delay:get(),
             debug_mode         = gui.elements.debug_mode:get(),
-            use_batmobile      = gui.elements.use_batmobile:get(),
-            enable_batmobile_fallback = gui.elements.enable_batmobile_fallback:get(),
             overlay_enabled    = gui.elements.overlay_enabled:get(),
             overlay_x          = gui.elements.overlay_x:get(),
             overlay_y          = gui.elements.overlay_y:get(),
@@ -345,11 +336,8 @@ local function _import_profile(class_key, silent)
     end
 
     if type(data.global) == 'table' then
-        _set_element(gui.elements.scan_range,         data.global.scan_range)
         _set_element(gui.elements.anim_delay,         data.global.anim_delay)
         _set_element(gui.elements.debug_mode,         data.global.debug_mode)
-        _set_element(gui.elements.use_batmobile,      data.global.use_batmobile)
-        _set_element(gui.elements.enable_batmobile_fallback, data.global.enable_batmobile_fallback)
         _set_element(gui.elements.overlay_enabled,    data.global.overlay_enabled)
         _set_element(gui.elements.overlay_x,          data.global.overlay_x)
         _set_element(gui.elements.overlay_y,          data.global.overlay_y)
@@ -621,13 +609,6 @@ on_render(function()
     
     local player_pos = player:get_position()
     if not player_pos then return end
-    
-    -- Draw global scan range circle
-    if gui.elements.show_global_range:get() then
-        local scan_range = gui.elements.scan_range:get()
-        -- Green circle for global scan range
-        graphics.circle_3d(player_pos, scan_range, color_green(180), 2.0)
-    end
     
     -- Draw per-spell range circles
     for i, spell_id in ipairs(equipped_ids) do

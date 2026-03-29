@@ -47,7 +47,6 @@ gui.elements = {
     keybind        = keybind:new(0x0A, true, get_hash(plugin_label .. '_keybind')),
 
     global_tree    = tree_node:new(1),
-    scan_range     = sf(5.0, 30.0, 12.0, 'scan_range'),
     anim_delay     = sf(0.0, 0.5,  0.05, 'anim_delay'),
 
     export_profile = cb(false, 'export_profile'),
@@ -67,9 +66,6 @@ gui.elements = {
     show_global_range  = cb(false, 'show_global_range'),
 
     debug_mode     = cb(false, 'debug_mode'),
-
-    use_batmobile  = cb(false, 'use_batmobile'),
-    enable_batmobile_fallback = cb(false, 'enable_batmobile_fallback'),
 
     equipped_tree  = tree_node:new(1),
     inactive_tree  = tree_node:new(1),
@@ -121,14 +117,7 @@ gui.render = function(spell_config, equipped_ids, all_known_ids)
     end
 
     if gui.elements.global_tree:push('Global Settings') then
-        gui.elements.scan_range:render('Scan Range', 'How far to scan for enemies', 1)
         gui.elements.anim_delay:render('Animation Delay (s)', 'Global animation delay after each cast', 2)
-
-        gui.elements.use_batmobile:render('Use Batmobile Navigation', 'Enable automatic pathfinding when Batmobile plugin is detected (controls wall/obstacle detection and stuck recovery)')
-
-        if gui.elements.use_batmobile:get() then
-            gui.elements.enable_batmobile_fallback:render('  Enable Fallback Navigation (Batmobile)', 'Use Batmobile for general movement when no dash spell is available (stops the "Using Batmobile fallback navigation" spam when OFF)')
-        end
 
         gui.elements.debug_mode:render('Debug Mode', 'Print cast info to console')
 
@@ -140,7 +129,6 @@ gui.render = function(spell_config, equipped_ids, all_known_ids)
                 gui.elements.overlay_font_size:render('Font Size', 'Size of the overlay text', 1)
                 gui.elements.overlay_line_gap:render('Line Gap', 'Extra spacing between lines', 1)
                 gui.elements.overlay_show_buffs:render('Show Active Buff List', 'Show active buffs in the overlay')
-                gui.elements.show_global_range:render('Show Global Scan Range Circle', 'Draw a circle around the player showing the current global scan range')
                 gui.elements.overlay_tree:pop()
             end
         end

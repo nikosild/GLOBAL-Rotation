@@ -7,112 +7,7 @@ local rotation_engine = {}
 
 local GLOBAL_GCD  = 0.05
 local _gcd_until  = 0.0
-local _scan_range = 12.0
-local _move_until = 0.0
-
-------------------------------------------------------------
--- Batmobile integration check
-------------------------------------------------------------
-local _batmobile_available = false
-local _batmobile_checked = false
-local _last_batmobile_setting = nil
-
-local function check_batmobile()
-    if _batmobile_checked then return _batmobile_available end
-    _batmobile_checked = true
-    
-    if BatmobilePlugin then
-        _batmobile_available = true
-    end
-    
-    return _batmobile_available
-end
-
-local function print_batmobile_status(use_batmobile)
-    if _last_batmobile_setting == use_batmobile then return end
-    _last_batmobile_setting = use_batmobile
-    
-    if not _batmobile_available then
-        if use_batmobile then
-            console.print('[GLOBAL Rotation] Batmobile integration: NOT FOUND (basic pathfinding only)')
-        end
-    else
-        if use_batmobile then
-            console.print('[GLOBAL Rotation] Batmobile integration: ENABLED')
-        else
-            console.print('[GLOBAL Rotation] Batmobile integration: DISABLED')
-        end
-    end
-end
-
-------------------------------------------------------------
--- Stuck detection system for walls/obstacles
-------------------------------------------------------------
-local _stuck_check = {
-    last_pos = nil,
-    last_target = nil,
-    stuck_time = 0,
-    last_check = 0,
-}
-
-local function update_stuck_detection(player_pos, current_target)
-    local now = get_time_since_inject()
-    
-    -- Only check every 0.5 seconds
-    if now - _stuck_check.last_check < 0.5 then return false end
-    _stuck_check.last_check = now
-    
-    -- Check if we have a target and position
-    if not current_target or not player_pos then
-        _stuck_check.stuck_time = 0
-        _stuck_check.last_pos = nil
-        _stuck_check.last_target = nil
-        return false
-    end
-    
-    -- Check if player position has changed
-    local is_stuck = false
-    if _stuck_check.last_pos then
-        local dist_moved = target_selector.dist2(player_pos, _stuck_check.last_pos)
-        -- If we moved less than 0.5 units in 0.5 seconds, we're stuck
-        if dist_moved < 0.25 then
-            _stuck_check.stuck_time = _stuck_check.stuck_time + 0.5
-            is_stuck = _stuck_check.stuck_time >= 1.5 -- Stuck for 1.5+ seconds
-        else
-            _stuck_check.stuck_time = 0
-        end
-    end
-    
-    _stuck_check.last_pos = player_pos
-    _stuck_check.last_target = current_target
-    
-    return is_stuck
-end
-
-local function handle_stuck_navigation(target, player_pos, settings)
-    if not target or not player_pos then return false end
-    
-    local tpos = nil
-    pcall(function() tpos = target:get_position() end)
-    if not tpos then return false end
-    
-    check_batmobile() -- Ensure Batmobile status is checked
-    
-    -- Force Batmobile pathfinding when stuck (only if enabled)
-    if _batmobile_available and settings.use_batmobile then
-        console.print('[GLOBAL Rotation] Stuck detected (1.5s) - forcing Batmobile navigation')
-        pcall(function() 
-            BatmobilePlugin.set_target('global_rotation', tpos, true)
-            BatmobilePlugin.update('global_rotation')
-            BatmobilePlugin.move('global_rotation')
-        end)
-        _stuck_check.stuck_time = 0 -- Reset stuck timer
-        _move_until = get_time_since_inject() + 0.5
-        return true
-    end
-    
-    return false
-end
+local _scan_range = 40.0  -- hardcoded; each spell filters by its own range
 
 ------------------------------------------------------------
 -- AOE threshold
@@ -365,11 +260,6 @@ local function can_act()
         if mode ~= 3 then return false end
     end
 
-    local pos = lp:get_position()
-    if evade and evade.is_dangerous_position and evade.is_dangerous_position(pos) then
-        return false
-    end
-
     local active  = lp:get_active_spell_id()
     local blocked = { [186139]=true, [197833]=true, [211568]=true }
     if active and blocked[active] then return false end
@@ -409,98 +299,6 @@ end
 -- Movement spell
 ------------------------------------------------------------
 local function try_movement_spell(equipped_ids, target, player_pos, settings)
-    if not target then 
-        return false 
-    end
-    
-    local now = get_time_since_inject()
-    if now < _move_until then 
-        return false 
-    end
-
-    local tpos = nil
-    pcall(function() tpos = target:get_position() end)
-    if not tpos then 
-        return false 
-    end
-
-    -- Calculate distance to target
-    local dist_sq = target_selector.dist2(player_pos, tpos)
-    local distance = math.sqrt(dist_sq)
-    
-
-    -- ──────────────────────────────────────────────────────────────────────
-    -- WALL / OBSTACLE DETECTION
-    -- Check if target is reachable directly or if we need to use Batmobile
-    -- ──────────────────────────────────────────────────────────────────────
-    check_batmobile() -- Ensure Batmobile status is checked
-    
-    local can_reach = true
-    if utility and type(utility.is_point_walkeable) == 'function' then
-        -- Check if we can walk directly to the target
-        local ok, result = pcall(function() return utility.is_point_walkeable(tpos) end)
-        can_reach = ok and result or false
-    end
-    
-    -- If we can't reach the target directly (wall/obstacle), use Batmobile first
-    if not can_reach and _batmobile_available and settings.use_batmobile then
-        pcall(function() 
-            BatmobilePlugin.set_target('global_rotation', tpos, true)
-            BatmobilePlugin.update('global_rotation')
-            BatmobilePlugin.move('global_rotation')
-        end)
-        _move_until = now + 0.35
-        return true
-    end
-
-    local movement_spell_found = false
-    for _, spell_id in ipairs(equipped_ids) do
-        if spell_id and spell_id > 1 then
-            local cfg = spell_config.get(spell_id)
-            if cfg.enabled and cfg.is_movement then
-                movement_spell_found = true
-                
-                -- Check minimum range: skip if target is too close
-                local min_range = cfg.min_range or 0.0
-                if distance < min_range then
-                    goto next_movement_spell
-                end
-                
-                if utility.is_spell_ready(spell_id) and utility.is_spell_affordable(spell_id) then
-                    if spell_tracker.is_off_cooldown(spell_id, cfg.cooldown, cfg.charges) then
-                        -- Only try to cast movement spell if target is reachable
-                        -- Otherwise let Batmobile handle it
-                        if can_reach then
-                            local ok = cast_spell.position(spell_id, tpos, settings.anim_delay or 0.05)
-                            if ok then
-                                spell_tracker.record_cast(spell_id, cfg.charges)
-                                _move_until = now + 0.5
-                                return true
-                            else
-                            end
-                        else
-                        end
-                    else
-                    end
-                else
-                end
-                ::next_movement_spell::
-            end
-        end
-    end
-
-    -- Fallback to Batmobile for navigation (handles walls/obstacles automatically)
-    -- This is controlled by a separate setting from wall/stuck detection
-    if _batmobile_available and settings.use_batmobile and settings.enable_batmobile_fallback then
-        pcall(function() 
-            BatmobilePlugin.set_target('global_rotation', tpos, true)
-            BatmobilePlugin.update('global_rotation')
-            BatmobilePlugin.move('global_rotation')
-        end)
-        _move_until = now + 0.35
-        return true
-    end
-
     return false
 end
 
@@ -795,10 +593,6 @@ end
 -- Main tick
 ------------------------------------------------------------
 function rotation_engine.tick(equipped_ids, settings)
-    -- Print batmobile status when setting changes
-    check_batmobile()
-    print_batmobile_status(settings.use_batmobile)
-
     local lp         = get_local_player()
     if not lp then return false end
     local player_pos = lp:get_position()
@@ -808,22 +602,6 @@ function rotation_engine.tick(equipped_ids, settings)
     if not can_act() then
         stop_channel()
         return false
-    end
-    
-    -- ──────────────────────────────────────────────────────────────────────
-    -- STUCK DETECTION: Check if bot is stuck targeting enemies behind walls
-    -- ──────────────────────────────────────────────────────────────────────
-    if targets.is_valid and targets.closest then
-        local is_stuck = update_stuck_detection(player_pos, targets.closest)
-        if is_stuck then
-            -- Bot is stuck (not moving while having a target) - force pathfinding
-            if handle_stuck_navigation(targets.closest, player_pos, settings) then
-                return true
-            end
-        end
-    else
-        -- No targets, reset stuck detection
-        update_stuck_detection(nil, nil)
     end
 
     -- Evade / movement spells fire first, before anything else
@@ -1103,20 +881,12 @@ function rotation_engine.tick(equipped_ids, settings)
             goto next_spell
         end
 
-        -- For channeled spells, use spell range for min_enemies check since they walk toward targets
         local aoe_check = cfg.is_channel and (cfg.range or range) or (cfg.aoe_range or 6.0)
 
         -- skip_small_packs: only cast when enough enemies are grouped
         if cfg.skip_small_packs then
             local pack_count = target_selector.count_near(targets, player_pos, aoe_check)
             if pack_count < (cfg.min_pack_size or 3) then
-                goto next_spell
-            end
-        end
-
-        if cfg.min_enemies > 0 then
-            local nearby = target_selector.count_near(targets, player_pos, aoe_check)
-            if nearby < cfg.min_enemies then
                 goto next_spell
             end
         end
@@ -1145,46 +915,15 @@ function rotation_engine.tick(equipped_ids, settings)
         local spell_range = cfg.range or range
         
         local target = target_selector.pick_target(targets, cfg, player_pos, spell_range)
-        if not target then
-            local stype    = cfg.spell_type or 0
-            local is_melee = (stype == 1) or (stype == 0 and (spell_range or 0) <= 6.0)
-            if is_melee and targets.closest then
-                try_movement_spell(equipped_ids, targets.closest, player_pos, settings)
-            end
-            goto next_spell
-        end
+        if not target then goto next_spell end
 
-        -- ── Check minimum engagement range ────────────────────────────────
-        -- Force movement toward target if it's within spell range but beyond
-        -- minimum engagement distance (for ranged skills that should be used at melee)
-        -- Channeled spells always use 0 (no minimum), movement spells use min_range
         local min_range = cfg.is_channel and 0.0 or (cfg.min_range or 0.0)
         if min_range > 0 then
             local tpos = nil
             pcall(function() tpos = target:get_position() end)
             if tpos then
-                local dist_sq = target_selector.dist2(player_pos, tpos)
-                local distance = math.sqrt(dist_sq)
-                
-                
-                -- Target is in spell range but too far from desired engagement distance
-                if distance > min_range then
-                    -- Count available movement spells
-                    local movement_count = 0
-                    for _, mid in ipairs(equipped_ids) do
-                        if mid and mid > 1 then
-                            local mcfg = spell_config.get(mid)
-                            if mcfg.enabled and mcfg.is_movement then
-                                movement_count = movement_count + 1
-                            end
-                        end
-                    end
-                    
-                    if try_movement_spell(equipped_ids, target, player_pos, settings) then
-                        goto next_spell  -- Movement spell cast, skip this spell for now
-                    else
-                    end
-                    -- If no movement spell available or failed, fall through to normal cast
+                if math.sqrt(target_selector.dist2(player_pos, tpos)) < min_range then
+                    goto next_spell
                 end
             end
         end
@@ -1248,10 +987,6 @@ function rotation_engine.tick(equipped_ids, settings)
     end
 
     return false
-end
-
-function rotation_engine.set_scan_range(r)
-    _scan_range = r or 12.0
 end
 
 return rotation_engine
