@@ -7,7 +7,7 @@ local rotation_engine = {}
 
 local GLOBAL_GCD  = 0.05
 local _gcd_until  = 0.0
-local _scan_range = 40.0  -- hardcoded; each spell filters by its own range
+local _scan_range = 12.0
 
 ------------------------------------------------------------
 -- AOE threshold
@@ -260,6 +260,11 @@ local function can_act()
         if mode ~= 3 then return false end
     end
 
+    local pos = lp:get_position()
+    if evade and evade.is_dangerous_position and evade.is_dangerous_position(pos) then
+        return false
+    end
+
     local active  = lp:get_active_spell_id()
     local blocked = { [186139]=true, [197833]=true, [211568]=true }
     if active and blocked[active] then return false end
@@ -337,7 +342,6 @@ end
 ------------------------------------------------------------
 local EVADE_SPELL_ID        = 337031
 local _special_evade_last   = 0
-local _dash_registered      = false
 local _trigger_path         = nil  -- resolved once at first use
 
 local function _get_trigger_path()
@@ -353,21 +357,10 @@ local function _get_trigger_path()
     return _trigger_path
 end
 
--- Registers 337031 as a framework dash once at startup.
-local function _ensure_dash_registered()
-    if _dash_registered then return end
-    if not evade or type(evade.register_dash) ~= 'function' then return end
-    pcall(function()
-        evade.register_dash(true, 'Special Evade', EVADE_SPELL_ID, 6.0, 0.05, true, true, true)
-    end)
-    _dash_registered = true
-end
 
 local function _try_evade_spell(equipped_ids, player_pos, anim_delay, settings, targets)
     local es  = settings and settings.evade
     local now = get_time_since_inject()
-
-    _ensure_dash_registered()
 
     -- Special Evade: write trigger file for special_evade_sender.py.
     if es and es.special_evade_enabled then
@@ -881,6 +874,7 @@ function rotation_engine.tick(equipped_ids, settings)
             goto next_spell
         end
 
+        -- For channeled spells, use spell range for min_enemies check since they walk toward targets
         local aoe_check = cfg.is_channel and (cfg.range or range) or (cfg.aoe_range or 6.0)
 
         -- skip_small_packs: only cast when enough enemies are grouped
@@ -889,6 +883,15 @@ function rotation_engine.tick(equipped_ids, settings)
             if pack_count < (cfg.min_pack_size or 3) then
                 goto next_spell
             end
+        end
+
+        -- min_enemies>1 only: =1 is redundant (targets.is_valid already guarantees >=1).
+        -- Also skip for single-target spell types.
+        local is_single_target = (cfg.spell_type == 1) or
+            (cfg.spell_type == 0 and (cfg.aoe_range or 6.0) <= 0)
+        if cfg.min_enemies > 1 and not is_single_target then
+            local nearby = target_selector.count_near(targets, player_pos, aoe_check)
+            if nearby < cfg.min_enemies then goto next_spell end
         end
 
         -- ── Self-cast path ────────────────────────────────────────────
@@ -987,6 +990,10 @@ function rotation_engine.tick(equipped_ids, settings)
     end
 
     return false
+end
+
+function rotation_engine.set_scan_range(r)
+    _scan_range = r or 12.0
 end
 
 return rotation_engine
