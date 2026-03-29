@@ -260,10 +260,10 @@ local function can_act()
         if mode ~= 3 then return false end
     end
 
-    local pos = lp:get_position()
-    if evade and evade.is_dangerous_position and evade.is_dangerous_position(pos) then
-        return false
-    end
+    -- NOTE: evade.is_dangerous_position is NOT checked here.
+    -- Evade spells now fire BEFORE can_act() in the tick loop,
+    -- so they can escape danger zones. Blocking the full rotation
+    -- on danger caused the character to freeze/stack in place.
 
     local active  = lp:get_active_spell_id()
     local blocked = { [186139]=true, [197833]=true, [211568]=true }
@@ -358,33 +358,60 @@ local function _get_trigger_path()
 end
 
 
+local _evade_trigger_cleaned = false  -- one-shot cleanup flag
+
+local function _clean_evade_trigger()
+    if _evade_trigger_cleaned then return end
+    _evade_trigger_cleaned = true
+    pcall(function()
+        local path = _get_trigger_path()
+        if path then os.remove(path) end
+    end)
+end
+
 local function _try_evade_spell(equipped_ids, player_pos, anim_delay, settings, targets)
     local es  = settings and settings.evade
     local now = get_time_since_inject()
 
-    -- Special Evade: write trigger file for special_evade_sender.py.
-    if es and es.special_evade_enabled then
-        local sp_cd = es.special_evade_cooldown or 3.0
-        if now - _special_evade_last >= sp_cd then
-            -- Check minimum enemy requirement
-            local min_enemies = es.special_evade_min_enemies or 0
-            local enemy_ok = true
-            if min_enemies > 0 then
-                local scan = es.special_evade_scan_range or 6.0
-                local nearby = target_selector.count_near(targets, player_pos, scan)
-                enemy_ok = nearby >= min_enemies
-            end
+    -- ── Safety: if ALL evade features are disabled, clean stale trigger
+    -- file once so magic.py (running for Butcher) won't press Space.
+    local any_evade_on = es and (es.enabled or es.special_evade_enabled)
+    if not any_evade_on then
+        _clean_evade_trigger()
+    else
+        _evade_trigger_cleaned = false  -- allow re-clean on next disable
+    end
 
-            if enemy_ok then
-                local path = _get_trigger_path()
-                local ok = false
-                pcall(function()
-                    local f = io.open(path, 'w')
-                    if f then f:write('1'); f:close(); ok = true end
-                end)
-                if ok then
-                    _special_evade_last = now
-                    return true
+    -- Special Evade: write trigger file for magic.py.
+    -- Only fires in combat mode (orb_mode 3) to prevent conflicts with exploration.
+    if es and es.special_evade_enabled then
+        local orb_ok = true
+        if orbwalker and type(orbwalker.get_orb_mode) == 'function' then
+            orb_ok = orbwalker.get_orb_mode() == 3
+        end
+        if orb_ok then
+            local sp_cd = es.special_evade_cooldown or 3.0
+            if now - _special_evade_last >= sp_cd then
+                -- Check minimum enemy requirement
+                local min_enemies = es.special_evade_min_enemies or 0
+                local enemy_ok = true
+                if min_enemies > 0 then
+                    local scan = es.special_evade_scan_range or 6.0
+                    local nearby = target_selector.count_near(targets, player_pos, scan)
+                    enemy_ok = nearby >= min_enemies
+                end
+
+                if enemy_ok then
+                    local path = _get_trigger_path()
+                    local ok = false
+                    pcall(function()
+                        local f = io.open(path, 'w')
+                        if f then f:write('1'); f:close(); ok = true end
+                    end)
+                    if ok then
+                        _special_evade_last = now
+                        return true
+                    end
                 end
             end
         end
@@ -399,21 +426,6 @@ local function _try_evade_spell(equipped_ids, player_pos, anim_delay, settings, 
                           and evade.is_dangerous_position(player_pos)
 
         local cd = es.cooldown or 1.0
-
-        local target_for_engage = nil
-        local tpos_for_engage   = nil
-        if es.auto_engage and not in_danger then
-            target_for_engage = targets and (targets.closest_boss or targets.closest_elite
-                                or targets.closest_champ or targets.closest)
-            if not target_for_engage then
-                local fresh = target_selector.get_targets(player_pos, settings.scan_range or 12.0)
-                target_for_engage = fresh.closest_boss or fresh.closest_elite
-                                    or fresh.closest_champ or fresh.closest
-            end
-            if target_for_engage then
-                pcall(function() tpos_for_engage = target_for_engage:get_position() end)
-            end
-        end
 
         -- Try cast methods in order; cast_spell.target wrapped in pcall for safety.
         local function try_all_cast_methods(spell_id, tgt, pos)
@@ -430,7 +442,8 @@ local function _try_evade_spell(equipped_ids, player_pos, anim_delay, settings, 
             return false
         end
 
-        -- Mode 1: danger zone
+        -- Mode 1: danger zone — fires even when can_act() would block
+        -- (this function now runs before can_act in the tick)
         if es.on_danger and in_danger then
             if spell_tracker.is_off_cooldown(EVADE_SPELL_ID, cd, 1) then
                 if try_all_cast_methods(EVADE_SPELL_ID, nil, player_pos) then
@@ -440,28 +453,42 @@ local function _try_evade_spell(equipped_ids, player_pos, anim_delay, settings, 
             end
         end
 
-        -- Mode 2: auto-engage
-        if es.auto_engage and not in_danger and tpos_for_engage then
-            if spell_tracker.is_off_cooldown(EVADE_SPELL_ID, cd, 1) then
-                local min_range = es.min_range or 0.0
-                if min_range > 0 then
-                    local dist_sq = target_selector.dist2(player_pos, tpos_for_engage)
-                    if math.sqrt(dist_sq) < min_range then
-                        goto check_bar_spells
-                    end
-                end
+        -- Mode 2: auto-engage — requires can_act() since it's an offensive dash
+        if es.auto_engage and not in_danger and can_act() then
+            local target_for_engage = targets and (targets.closest_boss or targets.closest_elite
+                                or targets.closest_champ or targets.closest)
+            if not target_for_engage then
+                local fresh = target_selector.get_targets(player_pos, settings.scan_range or 12.0)
+                target_for_engage = fresh.closest_boss or fresh.closest_elite
+                                    or fresh.closest_champ or fresh.closest
+            end
+            local tpos_for_engage = nil
+            if target_for_engage then
+                pcall(function() tpos_for_engage = target_for_engage:get_position() end)
+            end
 
-                local cast_pos = tpos_for_engage
-                local dist = es.engage_distance or 2.5
-                if dist > 0 and tpos_for_engage.get_extended then
-                    local ok2, mp = pcall(function()
-                        return tpos_for_engage:get_extended(player_pos, -dist)
-                    end)
-                    if ok2 and mp then cast_pos = mp end
-                end
-                if try_all_cast_methods(EVADE_SPELL_ID, target_for_engage, cast_pos) then
-                    spell_tracker.record_cast(EVADE_SPELL_ID, 1)
-                    return true
+            if tpos_for_engage then
+                if spell_tracker.is_off_cooldown(EVADE_SPELL_ID, cd, 1) then
+                    local min_range = es.min_range or 0.0
+                    if min_range > 0 then
+                        local dist_sq = target_selector.dist2(player_pos, tpos_for_engage)
+                        if math.sqrt(dist_sq) < min_range then
+                            goto check_bar_spells
+                        end
+                    end
+
+                    local cast_pos = tpos_for_engage
+                    local dist = es.engage_distance or 2.5
+                    if dist > 0 and tpos_for_engage.get_extended then
+                        local ok2, mp = pcall(function()
+                            return tpos_for_engage:get_extended(player_pos, -dist)
+                        end)
+                        if ok2 and mp then cast_pos = mp end
+                    end
+                    if try_all_cast_methods(EVADE_SPELL_ID, target_for_engage, cast_pos) then
+                        spell_tracker.record_cast(EVADE_SPELL_ID, 1)
+                        return true
+                    end
                 end
             end
         end
@@ -592,14 +619,15 @@ function rotation_engine.tick(equipped_ids, settings)
     local range      = settings.scan_range or _scan_range
     local targets    = target_selector.get_targets(player_pos, range)
 
+    -- Evade / movement spells fire BEFORE can_act() so on-danger evade
+    -- can escape danger zones (can_act blocks on is_dangerous_position).
+    if _try_evade_spell(equipped_ids, player_pos, settings.anim_delay, settings, targets) then
+        return true
+    end
+
     if not can_act() then
         stop_channel()
         return false
-    end
-
-    -- Evade / movement spells fire first, before anything else
-    if _try_evade_spell(equipped_ids, player_pos, settings.anim_delay, settings, targets) then
-        return true
     end
 
     -- Only stop channel if no enemies; self_cast spells can still proceed below

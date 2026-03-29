@@ -143,7 +143,15 @@ def handle_evade(evade_trigger, hwnd, counts):
     if not os.path.exists(evade_trigger):
         return hwnd
     try:
+        with open(evade_trigger, 'r') as f:
+            content = f.read().strip()
         os.remove(evade_trigger)
+
+        # Validate trigger content — must be '1' (written by Lua)
+        # Stale or corrupt files are silently discarded
+        if content != '1':
+            return hwnd
+
         if not hwnd:
             hwnd = get_game_hwnd()
         if not is_game_focused(hwnd):
