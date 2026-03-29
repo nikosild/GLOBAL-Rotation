@@ -527,19 +527,79 @@ end
 
 ------------------------------------------------------------
 -- Evade / movement skill handler
--- Spell ID 337031 is the Hardcore universal Evade — hardcoded, no bar slot needed.
+-- Resolves the active Evade ID dynamically at cast-time.
+-- Priority list: Arbiter form variant first, base Hardcore universal second.
+-- This handles ability-replacement forms (e.g. Paladin Arbiter) transparently —
+-- whichever ID is currently castable wins, no form detection required.
 -- Fires in two modes:
 --   1. Danger: triggers when player is in an evade zone / AoE indicator.
 --   2. Auto-engage: dashes toward the closest valid target when available.
 -- Per-skill is_evade flag on bar spells also triggers on danger (source 3).
 -- All sources run BEFORE the normal rotation.
 ------------------------------------------------------------
-local EVADE_SPELL_ID = 337031
+local EVADE_SPELL_ID        = 337031
+local _special_evade_last   = 0
+local _dash_registered      = false
+local _trigger_path         = nil  -- resolved once at first use
+
+local function _get_trigger_path()
+    if _trigger_path then return _trigger_path end
+    -- Use the script's own directory so io.open is guaranteed to work
+    local root = ''
+    pcall(function()
+        local path = package.path
+        root = path:match('(.*[/\\])') or ''
+    end)
+    _trigger_path = root .. 'evade_trigger.txt'
+    console.print('[SPECIAL EVADE] trigger file path: ' .. _trigger_path)
+    return _trigger_path
+end
+
+-- Registers 337031 as a framework dash once at startup.
+local function _ensure_dash_registered()
+    if _dash_registered then return end
+    if not evade or type(evade.register_dash) ~= 'function' then return end
+    pcall(function()
+        evade.register_dash(true, 'Special Evade', EVADE_SPELL_ID, 6.0, 0.05, true, true, true)
+    end)
+    _dash_registered = true
+end
 
 local function _try_evade_spell(equipped_ids, player_pos, anim_delay, settings, targets)
-    local es = settings and settings.evade
+    local es  = settings and settings.evade
+    local now = get_time_since_inject()
+
+    _ensure_dash_registered()
+
+    -- Special Evade: write trigger file for special_evade_sender.py.
+    if es and es.special_evade_enabled then
+        local sp_cd = es.special_evade_cooldown or 3.0
+        if now - _special_evade_last >= sp_cd then
+            -- Check minimum enemy requirement
+            local min_enemies = es.special_evade_min_enemies or 0
+            local enemy_ok = true
+            if min_enemies > 0 then
+                local scan = es.special_evade_scan_range or 6.0
+                local nearby = target_selector.count_near(targets, player_pos, scan)
+                enemy_ok = nearby >= min_enemies
+            end
+
+            if enemy_ok then
+                local path = _get_trigger_path()
+                local ok = false
+                pcall(function()
+                    local f = io.open(path, 'w')
+                    if f then f:write('1'); f:close(); ok = true end
+                end)
+                if ok then
+                    _special_evade_last = now
+                    return true
+                end
+            end
+        end
+    end
+
     if not es or not es.enabled then
-        -- Still check per-skill is_evade even if global evade is disabled
         goto check_bar_spells
     end
 
@@ -547,55 +607,70 @@ local function _try_evade_spell(equipped_ids, player_pos, anim_delay, settings, 
         local in_danger = evade and type(evade.is_dangerous_position) == 'function'
                           and evade.is_dangerous_position(player_pos)
 
-        local ready = utility.is_spell_ready(EVADE_SPELL_ID)
-                      and utility.is_spell_affordable(EVADE_SPELL_ID)
-                      and spell_tracker.is_off_cooldown(EVADE_SPELL_ID, es.cooldown or 1.0, 1)
+        local cd = es.cooldown or 1.0
 
-        -- Mode 1: Fire on danger zone
-        if es.on_danger and in_danger and ready then
-            local ok = cast_spell.self(EVADE_SPELL_ID, anim_delay or 0.05)
-            if not ok then
-                ok = cast_spell.position(EVADE_SPELL_ID, player_pos, anim_delay or 0.05)
+        local target_for_engage = nil
+        local tpos_for_engage   = nil
+        if es.auto_engage and not in_danger then
+            target_for_engage = targets and (targets.closest_boss or targets.closest_elite
+                                or targets.closest_champ or targets.closest)
+            if not target_for_engage then
+                local fresh = target_selector.get_targets(player_pos, settings.scan_range or 12.0)
+                target_for_engage = fresh.closest_boss or fresh.closest_elite
+                                    or fresh.closest_champ or fresh.closest
             end
-            if ok then
-                spell_tracker.record_cast(EVADE_SPELL_ID, 1)
-                return true
+            if target_for_engage then
+                pcall(function() tpos_for_engage = target_for_engage:get_position() end)
             end
         end
 
-        -- Mode 2: Auto-engage — dash toward target when not in danger and not reserved
-        if es.auto_engage and not in_danger and ready then
-            local target = targets and (targets.closest_boss or targets.closest_elite
-                           or targets.closest_champ or targets.closest)
-            if target then
-                local tpos = nil
-                pcall(function() tpos = target:get_position() end)
-                if tpos then
-                    -- Check minimum range: skip if target is too close
-                    local min_range = es.min_range or 0.0
-                    if min_range > 0 then
-                        local dist_sq = target_selector.dist2(player_pos, tpos)
-                        local distance = math.sqrt(dist_sq)
-                        if distance < min_range then
-                            goto skip_evade_engage
-                        end
+        -- Try cast methods in order; cast_spell.target wrapped in pcall for safety.
+        local function try_all_cast_methods(spell_id, tgt, pos)
+            if pos then
+                local ok = cast_spell.position(spell_id, pos, anim_delay or 0.05)
+                if ok then return true end
+            end
+            if tgt then
+                local ok2, result = pcall(cast_spell.target, tgt, spell_id, anim_delay or 0.05)
+                if ok2 and result then return true end
+            end
+            local ok = cast_spell.self(spell_id, anim_delay or 0.05)
+            if ok then return true end
+            return false
+        end
+
+        -- Mode 1: danger zone
+        if es.on_danger and in_danger then
+            if spell_tracker.is_off_cooldown(EVADE_SPELL_ID, cd, 1) then
+                if try_all_cast_methods(EVADE_SPELL_ID, nil, player_pos) then
+                    spell_tracker.record_cast(EVADE_SPELL_ID, 1)
+                    return true
+                end
+            end
+        end
+
+        -- Mode 2: auto-engage
+        if es.auto_engage and not in_danger and tpos_for_engage then
+            if spell_tracker.is_off_cooldown(EVADE_SPELL_ID, cd, 1) then
+                local min_range = es.min_range or 0.0
+                if min_range > 0 then
+                    local dist_sq = target_selector.dist2(player_pos, tpos_for_engage)
+                    if math.sqrt(dist_sq) < min_range then
+                        goto check_bar_spells
                     end
-                    
-                    -- Cast toward a point slightly short of the target
-                    local cast_pos = tpos
-                    local dist = es.engage_distance or 2.5
-                    if dist > 0 and tpos.get_extended then
-                        local ok2, mp = pcall(function()
-                            return tpos:get_extended(player_pos, -dist)
-                        end)
-                        if ok2 and mp then cast_pos = mp end
-                    end
-                    local ok = cast_spell.position(EVADE_SPELL_ID, cast_pos, anim_delay or 0.05)
-                    if ok then
-                        spell_tracker.record_cast(EVADE_SPELL_ID, 1)
-                        return true
-                    end
-                    ::skip_evade_engage::
+                end
+
+                local cast_pos = tpos_for_engage
+                local dist = es.engage_distance or 2.5
+                if dist > 0 and tpos_for_engage.get_extended then
+                    local ok2, mp = pcall(function()
+                        return tpos_for_engage:get_extended(player_pos, -dist)
+                    end)
+                    if ok2 and mp then cast_pos = mp end
+                end
+                if try_all_cast_methods(EVADE_SPELL_ID, target_for_engage, cast_pos) then
+                    spell_tracker.record_cast(EVADE_SPELL_ID, 1)
+                    return true
                 end
             end
         end
@@ -630,23 +705,110 @@ local function _try_evade_spell(equipped_ids, player_pos, anim_delay, settings, 
 end
 
 ------------------------------------------------------------
+-- Butcher mode tick
+-- Fires keys 1/2/3/4/RC while Possess_Butcher buff is active.
+-- Each key has its own cooldown, min enemies, and scan range.
+------------------------------------------------------------
+local BUTCHER_BUFF_NAME  = 'Possess_Butcher'
+local BUTCHER_BUFF_NAME2 = 'S12_Playable_Butcher_Spawn'
+local _butcher_trigger_path = nil
+
+local function _get_butcher_trigger_path()
+    if _butcher_trigger_path then return _butcher_trigger_path end
+    local root = ''
+    pcall(function()
+        local path = package.path
+        root = path:match('(.*[/\\])') or ''
+    end)
+    _butcher_trigger_path = root .. 'butcher_trigger.txt'
+    return _butcher_trigger_path
+end
+
+local function _has_butcher_buff()
+    local lp = get_local_player()
+    if not lp or type(lp.get_buffs) ~= 'function' then return false end
+    local buffs = lp:get_buffs()
+    if type(buffs) ~= 'table' then return false end
+    for _, b in ipairs(buffs) do
+        local name = nil
+        if type(b.name) == 'function' then pcall(function() name = b:name() end)
+        elseif type(b.get_name) == 'function' then pcall(function() name = b:get_name() end)
+        elseif type(b.name) == 'string' then name = b.name end
+        if name and (name:find(BUTCHER_BUFF_NAME, 1, true) or name:find(BUTCHER_BUFF_NAME2, 1, true)) then
+            return true
+        end
+    end
+    return false
+end
+
+local function _write_butcher_trigger(key_char)
+    local path = _get_butcher_trigger_path()
+    local f = io.open(path, 'w')
+    if f then
+        f:write(key_char)
+        f:flush()
+        f:close()
+    end
+end
+
+local function _tick_butcher_key(slot, key_char, now, player_pos, targets)
+    if not slot.enabled then return end
+    if now - slot.last < slot.cooldown then return end
+    local min_enemies = slot.min_enemies or 0
+    if min_enemies > 0 then
+        local scan = slot.scan_range or 12.0
+        local nearby = target_selector.count_near(targets, player_pos, scan)
+        if nearby < min_enemies then return end
+    end
+    _write_butcher_trigger(key_char)
+    slot.last = now
+end
+
+local function tick_butcher(settings, player_pos, targets)
+    local bs = settings and settings.butcher
+    if not bs or not bs.enabled then return end
+    if not bs.use_keymode then return end
+    if not _has_butcher_buff() then return end
+    local now = get_time_since_inject()
+    _tick_butcher_key(bs.k1, '1',  now, player_pos, targets)
+    _tick_butcher_key(bs.k2, '2',  now, player_pos, targets)
+    _tick_butcher_key(bs.k3, '3',  now, player_pos, targets)
+    _tick_butcher_key(bs.k4, '4',  now, player_pos, targets)
+    _tick_butcher_key(bs.lc, 'lc', now, player_pos, targets)
+    _tick_butcher_key(bs.rc, 'rc', now, player_pos, targets)
+end
+
+function rotation_engine.tick_butcher_external(settings)
+    -- Respect orbwalker master toggle (clear mode = 3)
+    if orbwalker and type(orbwalker.get_orb_mode) == 'function' then
+        if orbwalker.get_orb_mode() ~= 3 then return end
+    end
+    local lp = get_local_player()
+    if not lp then return end
+    local player_pos = lp:get_position()
+    local range   = (settings and settings.scan_range) or _scan_range
+    local targets = target_selector.get_targets(player_pos, range)
+    tick_butcher(settings, player_pos, targets)
+end
+
+------------------------------------------------------------
 -- Main tick
 ------------------------------------------------------------
 function rotation_engine.tick(equipped_ids, settings)
     -- Print batmobile status when setting changes
     check_batmobile()
     print_batmobile_status(settings.use_batmobile)
-    
+
+    local lp         = get_local_player()
+    if not lp then return false end
+    local player_pos = lp:get_position()
+    local range      = settings.scan_range or _scan_range
+    local targets    = target_selector.get_targets(player_pos, range)
+
     if not can_act() then
         stop_channel()
         return false
     end
-
-    local lp         = get_local_player()
-    local player_pos = lp:get_position()
-    local range      = settings.scan_range or _scan_range
-
-    local targets = target_selector.get_targets(player_pos, range)
     
     -- ──────────────────────────────────────────────────────────────────────
     -- STUCK DETECTION: Check if bot is stuck targeting enemies behind walls
@@ -753,7 +915,7 @@ function rotation_engine.tick(equipped_ids, settings)
                 table.insert(spell_list, {
                     spell_id     = spell_id,
                     cfg          = cfg,
-                    name         = get_name_for_spell(spell_id) or tostring(spell_id),
+                    name         = spell_config.get_custom_name(spell_id) or get_name_for_spell(spell_id) or tostring(spell_id),
                     eff_priority = eff_priority,
                 })
                 

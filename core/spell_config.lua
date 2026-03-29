@@ -14,6 +14,110 @@ local target_selector = require 'core.target_selector'
 local _equipped_ids   = {}
 local _equipped_names = {}  -- parallel array of display names
 
+local _custom_names = {}  -- [spell_id_str] = name
+local _custom_names_path = nil
+
+local function _get_custom_names_path()
+    if _custom_names_path then return _custom_names_path end
+    local root = ''
+    pcall(function()
+        -- package.path points to core/ subfolder, go up one level to script root
+        local p = package.path:match('(.*[/\\])') or ''
+        -- Remove trailing 'core/' or 'core\' if present
+        p = p:gsub('[/\\]?core[/\\]$', '')
+        p = p:gsub('[/\\]?core[/\\]?$', '')
+        if p ~= '' and not p:match('[/\\]$') then p = p .. '\\' end
+        root = p
+    end)
+    _custom_names_path = root .. 'custom_names.txt'
+    return _custom_names_path
+end
+
+local function _pretty_name(raw, id)
+    if not raw then return 'Spell ' .. id end
+    raw = tostring(raw):gsub('[%[%]]', ''):gsub('^%s+', ''):gsub('%s+$', '')
+    local parts = {}
+    for p in raw:gmatch('[^_]+') do parts[#parts + 1] = p end
+    if #parts >= 2 then table.remove(parts, 1) end
+    local phrase = table.concat(parts, ' ')
+    return phrase:lower():gsub('(%a)([%w\']*)', function(a, b) return a:upper() .. b end)
+end
+
+function spell_config.load_custom_names()
+    local path = _get_custom_names_path()
+    _custom_names = {}
+    local f = io.open(path, 'r')
+    if not f then return end
+    for line in f:lines() do
+        line = line:match('^%s*(.-)%s*$')
+        if line ~= '' and not line:match('^#') then
+            -- Format: N) Old name: SpellName (12345678)=CustomName
+            local id, name = line:match('%((%d+)%)=(.+)$')
+            if id and name then
+                _custom_names[id] = name
+            end
+        end
+    end
+    f:close()
+end
+
+function spell_config.update_custom_names_file()
+    if not _equipped_ids or #_equipped_ids == 0 then return end
+    local path = _get_custom_names_path()
+    local fw = io.open(path, 'w')
+    if not fw then return end
+    fw:write("# Custom skill names for GLOBAL Rotation\n")
+    fw:write("# Edit the names after '=' and press F5 to reload.\n")
+    fw:write("# Leave a name unchanged to keep the original.\n")
+    fw:write("\n")
+
+    -- Split into LC/RC (first 2 slots) and keys 1-4 (slots 3+)
+    local lc_rc = {}
+    local keys  = {}
+    local slot  = 0
+    for _, id in ipairs(_equipped_ids) do
+        if id and id > 1 then
+            slot = slot + 1
+            if slot <= 2 then
+                table.insert(lc_rc, { id = id, slot = slot })
+            else
+                table.insert(keys, { id = id, slot = slot })
+            end
+        end
+    end
+
+    -- Write keys 1-4 first
+    local key_num = 0
+    for _, entry in ipairs(keys) do
+        key_num = key_num + 1
+        local id       = entry.id
+        local current  = _custom_names[tostring(id)]
+        local original = _pretty_name(get_name_for_spell(id), id)
+        local display  = current or original
+        fw:write(key_num .. ") Old name: " .. original .. " (" .. tostring(id) .. ")=" .. display .. "\n")
+    end
+
+    -- Write LC/RC last with fixed labels
+    local mouse_labels = { 'Left Click', 'Right Click' }
+    for i, entry in ipairs(lc_rc) do
+        local id       = entry.id
+        local current  = _custom_names[tostring(id)]
+        local original = _pretty_name(get_name_for_spell(id), id)
+        local label    = mouse_labels[i] or ('Mouse ' .. i)
+        local display  = current or original
+        fw:write(label .. ") Old name: " .. original .. " (" .. tostring(id) .. ")=" .. display .. "\n")
+    end
+
+    fw:close()
+end
+
+function spell_config.get_custom_name(spell_id)
+    if not spell_id then return nil end
+    local v = _custom_names[tostring(spell_id)]
+    if v and v ~= '' then return v end
+    return nil
+end
+
 function spell_config.set_equipped_spells(ids)
     _equipped_ids   = ids or {}
     _equipped_names = {}

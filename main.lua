@@ -29,12 +29,26 @@ local settings = {
     overlay_line_gap   = 0,
     overlay_show_buffs = false,
     evade = {
-        enabled         = false,
-        spell_id        = 337031,   -- Hardcore universal Evade (hardcoded)
-        cooldown        = 1.0,
-        on_danger       = true,
-        auto_engage     = false,
-        engage_distance = 2.5,
+        enabled                = false,
+        cooldown               = 1.0,
+        on_danger              = true,
+        auto_engage            = false,
+        engage_distance        = 2.5,
+        special_evade_enabled     = false,
+        special_evade_cooldown    = 0.5,
+        special_evade_min_enemies = 1,
+        special_evade_scan_range  = 12.0,
+    },
+    butcher = {
+        enabled      = false,
+        use_keymode  = false,
+        use_keybind  = false,
+        k1  = { enabled = false, cooldown = 0.5,  min_enemies = 0, last = 0 },
+        k2  = { enabled = false, cooldown = 0.65, min_enemies = 0, last = 0 },
+        k3  = { enabled = false, cooldown = 0.8,  min_enemies = 0, last = 0 },
+        k4  = { enabled = false, cooldown = 0.95, min_enemies = 0, last = 0 },
+        lc  = { enabled = false, cooldown = 0.1,  min_enemies = 0, scan_range = 12.0, last = 0 },
+        rc  = { enabled = false, cooldown = 1.0,  min_enemies = 1, scan_range = 5.0,  last = 0 },
     },
 }
 
@@ -78,6 +92,10 @@ local function refresh_equipped()
             end
         end
     end
+
+    spell_config.set_equipped_spells(equipped_ids)
+    spell_config.load_custom_names()
+    spell_config.update_custom_names_file()
 end
 
 local function update_settings()
@@ -96,12 +114,63 @@ local function update_settings()
     rotation_engine.set_scan_range(settings.scan_range)
     spell_config.set_equipped_spells(equipped_ids)
     -- Evade skill settings
-    settings.evade.enabled         = gui.elements.evade_enabled:get()
+    -- Mutual exclusion: Classic Evade and Evade Replacement cannot both be on.
+    -- When both are detected as on, turn off whichever was already on last frame.
+    local classic_on     = gui.elements.evade_enabled:get()
+    local replacement_on = gui.elements.special_evade_enabled:get()
+    if classic_on and replacement_on then
+        if settings.evade.enabled then
+            -- Classic was already on — user just enabled Replacement, so turn Classic off
+            gui.elements.evade_enabled:set(false)
+            classic_on = false
+        else
+            -- Replacement was already on — user just enabled Classic, so turn Replacement off
+            gui.elements.special_evade_enabled:set(false)
+            replacement_on = false
+        end
+    end
+
+    settings.evade.enabled         = classic_on
     settings.evade.cooldown        = gui.elements.evade_cooldown:get()
     settings.evade.on_danger       = gui.elements.evade_on_danger:get()
     settings.evade.auto_engage     = gui.elements.evade_auto_engage:get()
     settings.evade.engage_distance = gui.elements.evade_engage_dist:get()
     settings.evade.min_range       = gui.elements.evade_min_range:get()
+    settings.evade.special_evade_enabled     = replacement_on
+    settings.evade.special_evade_cooldown    = gui.elements.special_evade_cooldown:get()
+    settings.evade.special_evade_min_enemies = gui.elements.special_evade_min_enemies:get()
+    settings.evade.special_evade_scan_range  = gui.elements.special_evade_scan_range:get()
+
+    -- Butcher settings
+    settings.butcher.enabled    = gui.elements.butcher_enabled:get()
+    settings.butcher.use_keybind = gui.elements.butcher_use_keybind:get()
+    if settings.butcher.use_keybind then
+        if gui.elements.butcher_keybind:get_toggled() then
+            settings.butcher.use_keymode = not settings.butcher.use_keymode
+        end
+    else
+        settings.butcher.use_keymode = true
+    end
+    local function read_butcher_key(slot, en_el, cd_el, me_el, sr_el)
+        slot.enabled     = en_el:get()
+        slot.cooldown    = cd_el:get()
+        slot.min_enemies = me_el:get()
+        slot.scan_range  = sr_el:get()
+    end
+    local e = gui.elements
+    -- k1-k4: only read enabled toggle, values are hardcoded
+    settings.butcher.k1.enabled = e.butcher_k1_enabled:get()
+    settings.butcher.k2.enabled = e.butcher_k2_enabled:get()
+    settings.butcher.k3.enabled = e.butcher_k3_enabled:get()
+    settings.butcher.k4.enabled = e.butcher_k4_enabled:get()
+    -- lc: cooldown hardcoded=0.1, min_enemies from slider (0 or 1), scan_range=12 when min>0
+    settings.butcher.lc.enabled     = e.butcher_lc_enabled:get()
+    settings.butcher.lc.min_enemies = e.butcher_lc_min_enemies:get()
+    settings.butcher.lc.scan_range  = 12.0
+    -- rc: cooldown and scan_range from integer sliders, min_enemies hardcoded=1
+    settings.butcher.rc.enabled     = e.butcher_rc_enabled:get()
+    settings.butcher.rc.cooldown    = e.butcher_rc_cooldown:get()
+    settings.butcher.rc.scan_range  = e.butcher_rc_scan_range:get()
 end
 
 local function _pretty_spell_name(raw)
@@ -123,6 +192,37 @@ end
 local function get_script_root()
     local root = string.gmatch(package.path, '.*?\\?')()
     return root and root:gsub('?', '') or ''
+end
+
+-- magic process manager
+local _magic_prev_enabled = nil
+
+local function _kill_magic()
+    pcall(os.execute, 'taskkill /F /IM pythonw.exe >nul 2>&1')
+end
+
+local _magic_launch_time = 0
+
+local function _launch_magic()
+    _kill_magic()
+    local now = os.time()
+    if now - _magic_launch_time < 2 then return end
+    _magic_launch_time = now
+    local py_path = get_script_root() .. 'magic.py'
+    pcall(os.execute, 'start "" /B pythonw "' .. py_path .. '"')
+    console.print('[GLOBAL Rotation] Magic launched.')
+end
+
+local function _update_magic_process(butcher_enabled, evade_replacement_enabled)
+    local needs_magic = butcher_enabled or evade_replacement_enabled
+    if needs_magic == _magic_prev_enabled then return end
+    _magic_prev_enabled = needs_magic
+    if needs_magic then
+        _launch_magic()
+    else
+        _kill_magic()
+        console.print('[GLOBAL Rotation] Magic stopped.')
+    end
 end
 
 local function _set_element(el, val)
@@ -189,12 +289,16 @@ local function _export_profile(class_key, silent)
             overlay_line_gap   = gui.elements.overlay_line_gap:get(),
         },
         evade = {
-            enabled         = gui.elements.evade_enabled:get(),
-            cooldown        = gui.elements.evade_cooldown:get(),
-            on_danger       = gui.elements.evade_on_danger:get(),
-            auto_engage     = gui.elements.evade_auto_engage:get(),
-            engage_distance = gui.elements.evade_engage_dist:get(),
-            min_range       = gui.elements.evade_min_range:get(),
+            enabled                = gui.elements.evade_enabled:get(),
+            cooldown               = gui.elements.evade_cooldown:get(),
+            on_danger              = gui.elements.evade_on_danger:get(),
+            auto_engage            = gui.elements.evade_auto_engage:get(),
+            engage_distance        = gui.elements.evade_engage_dist:get(),
+            min_range              = gui.elements.evade_min_range:get(),
+            special_evade_enabled     = gui.elements.special_evade_enabled:get(),
+            special_evade_cooldown    = gui.elements.special_evade_cooldown:get(),
+            special_evade_min_enemies = gui.elements.special_evade_min_enemies:get(),
+            special_evade_scan_range  = gui.elements.special_evade_scan_range:get(),
         },
         spells = {},
     }
@@ -260,6 +364,10 @@ local function _import_profile(class_key, silent)
         _set_element(gui.elements.evade_auto_engage, data.evade.auto_engage)
         _set_element(gui.elements.evade_engage_dist, data.evade.engage_distance)
         _set_element(gui.elements.evade_min_range,   data.evade.min_range)
+        _set_element(gui.elements.special_evade_enabled,     data.evade.special_evade_enabled)
+        _set_element(gui.elements.special_evade_cooldown,    data.evade.special_evade_cooldown)
+        _set_element(gui.elements.special_evade_min_enemies, data.evade.special_evade_min_enemies)
+        _set_element(gui.elements.special_evade_scan_range,  data.evade.special_evade_scan_range)
     end
 
     if type(data.spells) == 'table' then
@@ -355,7 +463,7 @@ local function render_overlay()
         y = y + lh
     end
 
-    line('[ GLOBAL Rotation | ALiTiS ]', color_yellow(255))
+    line('*** GLOBAL Rotation ***', color_yellow(255))
 
     local player_pos = lp:get_position()
     local ok_res_cur, res_cur = pcall(function() return lp:get_primary_resource_current() end)
@@ -370,26 +478,39 @@ local function render_overlay()
     local ts = require 'core.target_selector'
     local tgts = ts.get_targets(player_pos, settings.scan_range or 12)
     local enemy_count = tgts.enemy_count or 0
-    line(string.format('%d spells | %d enemies', #equipped_ids, enemy_count), color_white(180))
+---    line(string.format('%d spells | %d enemies', #equipped_ids, enemy_count), color_white(180))
 
     local shown = 0
     local spell_list = {}
+    local lc_rc_list = {}
+    local idx = 0
     for _, spell_id in ipairs(equipped_ids) do
         if spell_id > 1 then
+            idx = idx + 1
             local cfg = spell_config.get(spell_id)
             if cfg.enabled and not cfg.is_movement then
                 local pri = cfg.priority or 5
-                table.insert(spell_list, { id = spell_id, cfg = cfg, eff_pri = pri })
+                local entry = { id = spell_id, cfg = cfg, eff_pri = pri }
+                -- First 2 slots = LC (Basic) and RC (Core) — display last
+                if idx <= 2 then
+                    table.insert(lc_rc_list, entry)
+                else
+                    table.insert(spell_list, entry)
+                end
             end
         end
     end
-    table.sort(spell_list, function(a, b) return a.eff_pri < b.eff_pri end)
+    -- Append LC/RC at the end
+    for _, e in ipairs(lc_rc_list) do
+        table.insert(spell_list, e)
+    end
+    -- Order follows skill bar position (keys 1-4 first, LC/RC last)
 
     for _, entry in ipairs(spell_list) do
         if shown >= 6 then break end
         shown = shown + 1
         local id   = entry.id
-        local name = _pretty_spell_name(get_name_for_spell(id)) or tostring(id)
+        local name = spell_config.get_custom_name(id) or _pretty_spell_name(get_name_for_spell(id)) or tostring(id)
         local ready = utility.is_spell_ready(id) and utility.is_spell_affordable(id)
         local on_cd = not spell_tracker.is_off_cooldown(id, entry.cfg.cooldown, entry.cfg.charges)
 
@@ -399,24 +520,24 @@ local function render_overlay()
             charge_txt = string.format(' %d/%d', charges_left, charges_max)
         end
 
-        local label = string.format('[%d] %s%s', entry.eff_pri, name:sub(1, 18), charge_txt)
+        local label = string.format('[Pr = %d] %s%s', entry.eff_pri, name:sub(1, 18), charge_txt)
         local col
         if not ready then
             col = color_red(200)
             label = label .. ' (N/A)'
         elseif on_cd then
             col = color_yellow(200)
-            label = label .. ' (CD)'
+            label = label .. ' (Cooldown)'
         else
-            col = color_green(255)
-            label = label .. ' (RDY)'
+            col = color_green(200)
+            label = label .. ' (Ready)'
         end
         line(label, col)
     end
 
     if settings.overlay_show_buffs then
         y = y + 6
-        line('[ Active Buffs ]', color_white(200))
+        line('Active Buffs:', color_cyan(200))
 
         local buffs = {}
         if buff_provider and type(buff_provider.get_active_buffs) == 'function' then
@@ -457,7 +578,7 @@ local function render_overlay()
                 txt = txt .. string.format(' %.1fs', rem)
             end
 
-            line(txt:sub(1, 34), color_white(170))
+            line(txt:sub(1, 34), color_cyan(170))
             shown_b = shown_b + 1
         end
     end
@@ -470,11 +591,17 @@ on_update(function()
     update_settings()
     handle_profile_io()
 
+    -- Manage magic process based on butcher toggle
+    _update_magic_process(settings.butcher.enabled, settings.evade.special_evade_enabled)
+
     if not is_enabled() then return end
 
     local lp = get_local_player()
     if not lp then return end
     if lp:is_dead() then return end
+
+    -- Butcher mode runs independently of can_act but respects the main enable toggle
+    rotation_engine.tick_butcher_external(settings)
 
     rotation_engine.tick(equipped_ids, settings)
 end)
